@@ -28,6 +28,8 @@ cp .env.example .env
 | `OWNER_ID` | 你的 Telegram 数字 ID，找 [@userinfobot](https://t.me/userinfobot) |
 | `TG_PROXY` | 代理地址，直连可留空（如 `http://127.0.0.1:7897`） |
 | `TZ` | 时区，建议 `Asia/Shanghai` |
+| `SCAMMER_URL` | 骗子库远程链接（可选，默认已填好） |
+| `REFRESH_INTERVAL` | 骗子库刷新间隔秒数（可选，默认 300） |
 
 > ⚠️ `.env` 不进版本库、不进镜像，只留在服务器上。
 
@@ -58,9 +60,10 @@ docker run -d --name tgbot \
 
 ---
 
-## 数据持久化
+## 数据存储
 
-黑名单 (`blacklist.json`) 和骗子库 (`scammers.json`) 保存在 `./data/` 目录，重启/升级不丢失。
+- **黑名单** (`blacklist.json`)：本地文件，机器人本地读写，保存在 `./data/` 目录，重启/升级不丢失。
+- **骗子库** (`scammers.json`)：托管在 GitHub 仓库根目录，机器人启动时 + 每 5 分钟自动从远程拉取。想增删骗子，直接编辑 GitHub 上的 `scammers.json` 提交即可，无需重启容器。
 
 ---
 
@@ -72,8 +75,6 @@ docker run -d --name tgbot \
 | `/block` | 拉黑用户 |
 | `/unblock` | 解除拉黑 |
 | `/blacklist` | 查看黑名单 |
-| `/addscam` | 添加骗子 |
-| `/delscam` | 删除骗子 |
 | `/scamlist` | 查看骗子库 |
 
 ---

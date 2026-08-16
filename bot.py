@@ -7,6 +7,7 @@ import os
 import json
 import time
 import logging
+import httpx
 
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, BotCommand, BotCommandScopeDefault, BotCommandScopeChat
@@ -24,7 +25,8 @@ OWNER_ID = int(_owner_id) if _owner_id.isdigit() else 0
 PROXY_URL = os.environ.get("TG_PROXY", "").strip()
 DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
 BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklist.json")
-SCAMMER_FILE = os.path.join(DATA_DIR, "scammers.json")
+SCAMMER_URL = os.environ.get("SCAMMER_URL", "https://raw.githubusercontent.com/ylgyyy/tgbot/refs/heads/main/scammers.json").strip()
+REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL", "300") or "300")
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -116,38 +118,22 @@ def unblock_user(context: ContextTypes.DEFAULT_TYPE, user_id: int):
 # ============================================================
 # 骗子库
 # ============================================================
-def load_scammers() -> set[int]:
-    if os.path.exists(SCAMMER_FILE):
-        try:
-            with open(SCAMMER_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f).get("scammers", []))
-        except (json.JSONDecodeError, KeyError):
-            return set()
-    return set()
-
-def save_scammers(scammers: set[int]):
-    with open(SCAMMER_FILE, "w", encoding="utf-8") as f:
-        json.dump({"scammers": list(scammers)}, f, ensure_ascii=False, indent=2)
+async def fetch_scammers() -> set[int] | None:
+    """从 GitHub 拉取骗子库；失败返回 None，调用方保留旧名单。"""
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(SCAMMER_URL)
+            resp.raise_for_status()
+            return set(resp.json().get("scammers", []))
+    except Exception as e:
+        logger.error(f"拉取骗子库失败: {e}")
+        return None
 
 def get_scammers(context: ContextTypes.DEFAULT_TYPE) -> set[int]:
-    if "scammers" not in context.bot_data:
-        context.bot_data["scammers"] = load_scammers()
-    return context.bot_data["scammers"]
+    return context.bot_data.get("scammers", set())
 
 def is_scammer(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
     return user_id in get_scammers(context)
-
-def add_scammer(context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    sc = get_scammers(context)
-    sc.add(user_id)
-    context.bot_data["scammers"] = sc
-    save_scammers(sc)
-
-def del_scammer(context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    sc = get_scammers(context)
-    sc.discard(user_id)
-    context.bot_data["scammers"] = sc
-    save_scammers(sc)
 
 
 def build_switch_success(sender_name: str, sender_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -174,7 +160,7 @@ BLACKLIST_KEYBOARD = ReplyKeyboardMarkup([
 ], resize_keyboard=True)
 
 SCAM_KEYBOARD = ReplyKeyboardMarkup([
-    [KeyboardButton("⚠️ 加骗子"), KeyboardButton("✅ 删骗子"), KeyboardButton("📋 骗子名单")],
+    [KeyboardButton("📋 骗子名单")],
     [KeyboardButton("🔙 返回主菜单")],
 ], resize_keyboard=True)
 
@@ -341,69 +327,6 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================
-# /addscam
-# ============================================================
-async def addscam_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != OWNER_ID:
-        return
-    replied = update.message.reply_to_message
-    if replied:
-        target_id = MSG_MAP.get(replied.message_id)
-        if target_id:
-            add_scammer(context, target_id)
-            await update.message.reply_text(f"⚠️ 已标记为骗子: *{get_user_name(context, target_id)}*", parse_mode="Markdown")
-            return
-        else:
-            await update.message.reply_text("⚠️ 找不到这条消息对应的发送者。")
-            return
-
-    recent = get_recent_users(context)
-    scammers = get_scammers(context)
-    candidates = [u for u in recent if u["id"] not in scammers]
-    if not candidates:
-        await update.message.reply_text("没有可添加的用户。")
-        return
-    keyboard = [[InlineKeyboardButton(f"⚠️ {u['name']}", callback_data=f"ascam_{u['id']}")] for u in candidates]
-    await update.message.reply_text(
-        "⚠️ *添加骗子*（点击添加，或回复消息 + /addscam）：",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown",
-    )
-
-
-# ============================================================
-# /delscam
-# ============================================================
-async def delscam_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != OWNER_ID:
-        return
-    replied = update.message.reply_to_message
-    if replied:
-        target_id = MSG_MAP.get(replied.message_id)
-        if target_id and is_scammer(context, target_id):
-            del_scammer(context, target_id)
-            await update.message.reply_text(f"✅ 已从骗子库移除: *{get_user_name(context, target_id)}*", parse_mode="Markdown")
-            return
-        elif target_id:
-            await update.message.reply_text("该用户不在骗子库中。")
-            return
-        else:
-            await update.message.reply_text("⚠️ 找不到这条消息对应的发送者。")
-            return
-
-    scammers = get_scammers(context)
-    if not scammers:
-        await update.message.reply_text("骗子库是空的。")
-        return
-    keyboard = [[InlineKeyboardButton(f"✅ {get_user_name(context, uid)}", callback_data=f"dscam_{uid}")] for uid in scammers]
-    await update.message.reply_text(
-        "🔓 *删除骗子*（点击移除，或回复消息 + /delscam）：",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown",
-    )
-
-
-# ============================================================
 # /scamlist
 # ============================================================
 async def scamlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -421,7 +344,7 @@ async def scamlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================
-# 回调：拉黑 / 解封 / 加骗子 / 删骗子
+# 回调：拉黑 / 解封
 # ============================================================
 async def block_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
@@ -436,20 +359,6 @@ async def unblock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: await query.edit_message_text("⚠️ 选项无效。"); return
     unblock_user(context, target_id)
     await query.edit_message_text(f"✅ 已解除拉黑 *{get_user_name(context, target_id)}*", parse_mode="Markdown")
-
-async def addscam_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    try: target_id = int(query.data.split("_")[1])
-    except: await query.edit_message_text("⚠️ 选项无效。"); return
-    add_scammer(context, target_id)
-    await query.edit_message_text(f"⚠️ 已标记为骗子: *{get_user_name(context, target_id)}*", parse_mode="Markdown")
-
-async def delscam_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    try: target_id = int(query.data.split("_")[1])
-    except: await query.edit_message_text("⚠️ 选项无效。"); return
-    del_scammer(context, target_id)
-    await query.edit_message_text(f"✅ 已从骗子库移除: *{get_user_name(context, target_id)}*", parse_mode="Markdown")
 
 
 # ============================================================
@@ -606,8 +515,6 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🚷 拉黑": block_command,
             "🔓 解封": unblock_command,
             "📋 黑名单": blacklist_command,
-            "⚠️ 加骗子": addscam_command,
-            "✅ 删骗子": delscam_command,
             "📋 骗子名单": scamlist_command,
         }
 
@@ -616,7 +523,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == "🚫 小黑屋":
             await update.message.reply_text("🚫 小黑屋 — 选择操作：", reply_markup=BLACKLIST_KEYBOARD)
         elif text == "⚠️ 骗子库":
-            await update.message.reply_text("⚠️ 骗子库 — 选择操作：", reply_markup=SCAM_KEYBOARD)
+            await update.message.reply_text("⚠️ 骗子库 — 名单由 GitHub 远程管理：", reply_markup=SCAM_KEYBOARD)
         elif text == "🔙 返回主菜单":
             await update.message.reply_text("✅ 已返回主菜单", reply_markup=MAIN_KEYBOARD)
         elif text in sub_commands:
@@ -635,6 +542,11 @@ async def cleanup_map(context: ContextTypes.DEFAULT_TYPE):
         keys = list(MSG_MAP.keys())
         for k in keys[:-1000]:
             del MSG_MAP[k]
+
+async def refresh_scammers(context: ContextTypes.DEFAULT_TYPE):
+    scammers = await fetch_scammers()
+    if scammers is not None:
+        context.bot_data["scammers"] = scammers
 
 
 # ============================================================
@@ -674,25 +586,28 @@ def main():
     app.add_handler(CommandHandler("block", block_command))
     app.add_handler(CommandHandler("unblock", unblock_command))
     app.add_handler(CommandHandler("blacklist", blacklist_command))
-    app.add_handler(CommandHandler("addscam", addscam_command))
-    app.add_handler(CommandHandler("delscam", delscam_command))
     app.add_handler(CommandHandler("scamlist", scamlist_command))
 
     # 回调
     app.add_handler(CallbackQueryHandler(switch_callback, pattern=r"^sw_\d+$"))
     app.add_handler(CallbackQueryHandler(block_callback, pattern=r"^blk_\d+$"))
     app.add_handler(CallbackQueryHandler(unblock_callback, pattern=r"^ublk_\d+$"))
-    app.add_handler(CallbackQueryHandler(addscam_callback, pattern=r"^ascam_\d+$"))
-    app.add_handler(CallbackQueryHandler(delscam_callback, pattern=r"^dscam_\d+$"))
 
     # 消息
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, router))
 
     if app.job_queue:
         app.job_queue.run_repeating(cleanup_map, interval=1800)
+        app.job_queue.run_repeating(refresh_scammers, interval=REFRESH_INTERVAL)
     app.add_error_handler(error_handler)
 
-    async def set_commands(app):
+    async def on_startup(app):
+        # 初始拉取骗子库
+        scammers = await fetch_scammers()
+        if scammers is not None:
+            app.bot_data["scammers"] = scammers
+            logger.info(f"骗子库已加载: {len(scammers)} 人")
+
         # 普通用户
         await app.bot.set_my_commands([
             BotCommand("start", "开始"),
@@ -706,12 +621,10 @@ def main():
             BotCommand("block", "拉黑用户"),
             BotCommand("unblock", "解除拉黑"),
             BotCommand("blacklist", "查看黑名单"),
-            BotCommand("addscam", "添加骗子"),
-            BotCommand("delscam", "删除骗子"),
             BotCommand("scamlist", "查看骗子库"),
         ], scope=BotCommandScopeChat(chat_id=OWNER_ID))
 
-    app.post_init = set_commands
+    app.post_init = on_startup
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

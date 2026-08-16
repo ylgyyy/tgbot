@@ -6,7 +6,7 @@
 # ============ 运行时数据 (本地生成, 不进仓库) ============
 data/
 blacklist.json
-scammers.json
+# scammers.json 作为远程源，提交到仓库（勿忽略）
 
 # ============ Python ============
 __pycache__/
