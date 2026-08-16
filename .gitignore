@@ -1,0 +1,28 @@
+# ============ 密钥与本地配置 —— 千万别提交到 GitHub ============
+.env
+.env.*
+!.env.example
+
+# ============ 运行时数据 (本地生成, 不进仓库) ============
+data/
+blacklist.json
+scammers.json
+
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# ============ IDE / 编辑器 ============
+.vscode/
+.idea/
+
+# ============ 系统 ============
+.DS_Store
+Thumbs.db
+
+# ============ 本地脚本 (不进仓库) ============
+upload.bat
